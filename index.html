@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Quantization Lightbox</title>
+  <meta name="description" content="Weight quantization, shown on pixels. An interactive visualizer comparing uniform, block-wise, error diffusion, and mixed-precision quantization schemes.">
+  <meta name="theme-color" content="#0e0d12">
+  <meta property="og:title" content="Quantization Lightbox">
+  <meta property="og:description" content="Weight quantization, shown on pixels. An interactive visualizer comparing uniform, block-wise, error diffusion, and mixed-precision quantization schemes.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Quantization Lightbox">
+  <meta name="twitter:description" content="Weight quantization, shown on pixels. An interactive visualizer comparing uniform, block-wise, error diffusion, and mixed-precision quantization schemes.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316141c'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%23f2b44c'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%237fb2ff'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%237fb2ff'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%23f2b44c'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Weight quantization, shown on pixels</div>
+    <h1>Quantization Lightbox</h1>
+    <p>Each panel treats the image's color channels like a weight tensor and squeezes them into a few bits, using a scheme that loosely mirrors a real LLM quantization method. Click any image to inspect that spot up close; the math further down follows the same spot and the same settings.</p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl">
+      <label class="lbl" for="bits">Bits per value</label>
+      <div style="display:flex;gap:10px;align-items:center"><input id="bits" type="range" min="1" max="8" value="2"><output id="bitsOut">2</output></div>
+    </div>
+    <div class="ctl">
+      <span class="lbl">Block size</span>
+      <div class="seg" id="blockSeg" role="group" aria-label="Block size">
+        <button data-v="4">4×4</button><button data-v="8" aria-pressed="true">8×8</button><button data-v="16">16×16</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="lbl">Show</span>
+      <div class="seg" id="viewSeg" role="group" aria-label="View">
+        <button data-v="img" aria-pressed="true">Image</button><button data-v="err">Error map</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="lbl">Source</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn" id="pick">Load image…</button>
+        <button class="btn" id="sample">Use nebula</button>
+        <input id="file" type="file" accept="image/*" style="display:none">
+      </div>
+    </div>
+  </div>
+
+  <section aria-label="Quantization comparison">
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <div class="legend" id="legend" hidden>
+    <div class="bar" id="legendBar"></div>
+    <div class="lbls"><span>0 error</span><span>RMSE max (0.25)</span></div>
+  </div>
+
+  <section class="strip-wrap" aria-label="Magnified strip">
+    <div class="strip-head">
+      <div>
+        <h2>64×64 patch, magnified 3×</h2>
+        <p class="lede">Focus: <span class="mono" id="where">center</span> · click any specimen to center on a detail</p>
+      </div>
+    </div>
+    <div class="strip" id="strip"></div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <h2>How the arithmetic works</h2>
+      <p class="lede">Every method on this page starts from the same 8-bit RGB image and squeezes it into fewer bits.</p>
+    </div>
+    <div class="prose">
+      <p>The uncompressed image is an array of bytes, one per color channel per pixel. On the 0–255 scale, 0 is fully dark and 255 is fully saturated. That is the raw input.</p>
+      <pre class="eq mono" id="rawEq"></pre>
+      <p>A <strong>naive uniform grid</strong> simply rescales that 0–255 range to 2<sup>b</sup> evenly spaced values. It is easy to compute, but wasteful: if an image happens to have one bright spot and the rest is dark, the whole bit budget is spent describing the gap between them, and the dark regions lose their detail.</p>
+      <pre class="eq mono" id="naiveGrid"></pre>
+      <p><strong>Block-wise scaling</strong> solves this by carving the image into small squares (8×8 by default). Each block keeps its own minimum value and step size, so a dim block can spend all its codes on the subtle differences between dark pixels. That requires storing a small amount of extra data per block (metadata), which is accounted for in the cost table below.</p>
+      <p><strong>Error diffusion</strong> uses the same blocks, but when rounding a pixel introduces an error, it pushes that error onto the neighbouring pixels that haven't been quantized yet. The average brightness of the patch is preserved, which makes edges and gradients look far sharper than the numbers suggest.</p>
+      <p><strong>Mixed precision</strong> notices that flat regions (like a smooth sky) need fewer bits than busy regions (like starry dust). It assigns more bits to high-variance blocks and fewer to low-variance ones, keeping the total bits the same.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <div>
+        <h2>Inside one block</h2>
+        <p class="lede">Focus at <span class="mono" id="where2">the selected patch</span> · red channel values on the 0–255 scale</p>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="side-panel">
+        <dl class="kv" id="blockKv"></dl>
+      </div>
+      <div class="main-panel">
+        <div class="prose">
+          <p>Each value in the block is encoded as an integer <em>q</em> between 0 and 2<sup>b</sup> − 1. The decoder reconstructs the pixel as <code>m + q × s</code>, where <em>m</em> is the block minimum and <em>s</em> is the step size, both stored as 16-bit floats (fp16).</p>
+          <div class="layout" id="layout"></div>
+          <p id="rowLabel" class="lbl" style="margin-top:14px"></p>
+          <div class="tablewrap"><table id="rowTable"></table></div>
+          <div class="packed mono" id="packed" style="margin-top:14px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <div>
+        <h2>Block microscope</h2>
+        <p class="lede"><span class="mono" id="scopeWhere">loading…</span> · single-channel matrices showing codes, reconstructed values, and error</p>
+      </div>
+      <div class="seg" id="chanSeg" role="group" aria-label="Microscope channel">
+        <button data-v="0" aria-pressed="true">Red</button><button data-v="1">Green</button><button data-v="2">Blue</button>
+      </div>
+    </div>
+    <div class="ctxrow" id="ctxrow">
+      <figure class="ctx"><canvas id="ctx-c" width="192" height="192"></canvas><figcaption>Color</figcaption></figure>
+      <button class="ctx pick" data-ch="0" aria-pressed="true"><canvas id="ctx-0" width="192" height="192"></canvas><span>Red</span></button>
+      <button class="ctx pick" data-ch="1" aria-pressed="false"><canvas id="ctx-1" width="192" height="192"></canvas><span>Green</span></button>
+      <button class="ctx pick" data-ch="2" aria-pressed="false"><canvas id="ctx-2" width="192" height="192"></canvas><span>Blue</span></button>
+    </div>
+    <p class="note" id="ctxNote">24×24 pixels around the patch, magnified 8×. The frame marks the 8×8 patch inspected below. Pick a channel by clicking its tile.</p>
+    <div id="scope"></div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <h2>What each version costs</h2>
+      <p class="lede">Totals for the whole image at the current settings. Bits per value is total bits divided by the number of values (width × height × 3).</p>
+    </div>
+    <div class="tablewrap"><table id="costTable"></table></div>
+    <div class="prose">
+      <p><strong>How this maps to GGUF.</strong> Q4_0 stores 32 weights as 4-bit codes plus one 16-bit scale: 32 × 4 + 16 = 144 bits, or 4.5 bits per weight. Q4_K groups 256 weights into a super-block with two 16-bit numbers, then gives each of its eight 32-weight sub-blocks a 6-bit scale and 6-bit minimum: 256 × 4 + 8 × 12 + 32 = 1152 bits, again 4.5 per weight. The scales themselves are quantized, which is how k-quants keep a per-block minimum without paying 32 bits for it. That is the same arithmetic as the table, one level deeper.</p>
+    </div>
+  </section>
+
+  <div class="notes">
+    <p><strong>Where the metaphor stretches.</strong> Here you see the quantized values directly. In an LLM nobody looks at the weights; the error passes through many layers and much of it is absorbed, so a Q4 model degrades far less than these pictures suggest. Blocks here are 2D tiles; in GGUF they are runs of 32 weights along a row.</p>
+    <p><strong>Error diffusion</strong> uses the Floyd–Steinberg kernel. GPTQ applies the same idea to weights but chooses where the error goes using second-order (Hessian) information from calibration data instead of a fixed kernel.</p>
+    <p><strong>Mixed precision</strong> here allocates by pixel variance. Q4_K_M keeps some whole tensors at higher precision, and an importance matrix (imatrix) uses real activations to decide which weights' rounding error matters most.</p>
+    <p><strong>Working size.</strong> Large images are scaled down to at most 900 pixels wide before processing, so all numbers on this page refer to the scaled size.</p>
+  </div>
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
