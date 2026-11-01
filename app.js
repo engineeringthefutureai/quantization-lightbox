@@ -1,4 +1,21 @@
-const SAMPLE = "sample.png";
+const SAMPLE = "sample.png", WIZARD = "wizard.png";
+const params = new URLSearchParams(window.location.search);
+const hideOrangeFrame =
+  params.get("frame") === "0" ||
+  params.get("frame") === "false" ||
+  params.get("frame") === "none" ||
+  params.get("frame") === "off" ||
+  params.get("frame") === "hidden" ||
+  params.get("frame") === "hide" ||
+  params.get("orangeframe") === "0" ||
+  params.get("orangeframe") === "false" ||
+  params.get("orangeframe") === "none" ||
+  params.get("orangeframe") === "off" ||
+  params.get("orangeframe") === "hidden" ||
+  params.get("orangeframe") === "hide" ||
+  (params.has("hideframe") && params.get("hideframe") !== "0" && params.get("hideframe") !== "false") ||
+  (params.has("noframe") && params.get("noframe") !== "0" && params.get("noframe") !== "false") ||
+  (params.has("hideorangeframe") && params.get("hideorangeframe") !== "0" && params.get("hideorangeframe") !== "false");
 const MAXW = 900, WIN = 64, ERRMAX = 0.15;
 const METHODS = [
   {id:"orig", name:"Original", tag:"8-bit source", analog:"The full-precision weights, standing in for FP16 or BF16."},
@@ -57,6 +74,7 @@ $("bits").addEventListener("input", () => { state.bits = +$("bits").value; $("bi
 $("pick").onclick = () => $("file").click();
 $("file").onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
 $("sample").onclick = () => loadURL(SAMPLE);
+$("wizard").onclick = () => loadURL(WIZARD);
 addEventListener("dragover", e => e.preventDefault());
 addEventListener("drop", e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f && f.type.startsWith("image/")) loadFile(f); });
 
@@ -229,7 +247,9 @@ function drawMarkers() {
   $("where").textContent = state.focus ? `x ${x + WIN/2}, y ${y + WIN/2}` : "center";
   for (const m of METHODS) {
     const {ctx} = cards[m.id]; ctx.putImageData(images[m.id], 0, 0);
-    ctx.strokeStyle = "#f2b44c"; ctx.lineWidth = Math.max(2, state.W / 300); ctx.strokeRect(x + .5, y + .5, WIN, WIN);
+    if (!hideOrangeFrame) {
+      ctx.strokeStyle = "#f2b44c"; ctx.lineWidth = Math.max(2, state.W / 300); ctx.strokeRect(x + .5, y + .5, WIN, WIN);
+    }
   }
 }
 function drawStrip() {
